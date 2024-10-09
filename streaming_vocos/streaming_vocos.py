@@ -63,11 +63,13 @@ class StreamingVocos(Vocos):
         name: str = "mel",
         bandwidth_id: int = -1,
         chunk_size_ms: int = 300,
-        padding_ms: int = 320,
+        padding_ms: int = None,
     ):
         super().__init__(name)
         self.bandwidth_id = bandwidth_id
         self.chunk_size = int(chunk_size_ms / 1000 * 24000 / self.upsample_rate)
+        # 8 * 3 * self.upsample_rate / 24000 * 1000
+        padding_ms = padding_ms or self.upsample_rate
         self.padding = int(padding_ms / 1000 * 24000 / self.upsample_rate)
         self.caches_len = self.chunk_size + 2 * self.padding
 
@@ -100,13 +102,12 @@ class StreamingVocos(Vocos):
         Returns:
             Tensor: The output tensor representing the reconstructed audio waveform of shape (B, T).
         """
-        num_features = features.shape[2]
         for idx, feature in enumerate(torch.unbind(features, dim=2)):
-            self.cur_idx += 1
             self.caches = torch.roll(self.caches, shifts=-1, dims=2)
             self.caches[:, :, -1] = feature
-            is_last = is_last and idx == num_features - 1
+            is_last = is_last and idx == features.shape[2] - 1
             cur_size = self.get_size()
+            self.cur_idx += 1
             if cur_size != self.chunk_size and not is_last:
                 continue
             audio = self.decode(self.caches, self.bandwidth_id)
@@ -124,3 +125,29 @@ class StreamingVocos(Vocos):
         features = self.codes_to_features(codes)
         for audio in self.streaming_decode(features, is_last=is_last):
             yield audio
+
+    def test_streaming_decode(self, wav_path: str):
+        import torchaudio
+
+        audio, sr = torchaudio.load(wav_path)
+        if audio.size(0) > 1:
+            audio = audio.mean(dim=0, keepdim=True)
+        audio = torchaudio.functional.resample(audio, orig_freq=sr, new_freq=24000)
+
+        audio_hat = []
+        if self.name == "encodec":
+            codes = self.get_encodec_codes(audio)
+            audio = self.decode_codes(codes)
+            for idx, code in enumerate(torch.unbind(codes, dim=2)):
+                is_last = idx == codes.shape[2] - 1
+                audio_hat += self.streaming_decode_codes(code[:, :, None], is_last=is_last)
+        else:
+            features = self.feature_extractor(audio)
+            audio = self.decode(features)
+            for idx, feature in enumerate(torch.unbind(features, dim=2)):
+                is_last = idx == features.shape[2] - 1
+                audio_hat += self.streaming_decode(feature[:, :, None], is_last=is_last)
+
+        audio_hat = torch.cat(audio_hat, dim=1)
+        similarity = torch.cosine_similarity(audio, audio_hat).mean()
+        print(audio.shape[1], audio_hat.shape[1], similarity)
