@@ -105,16 +105,16 @@ class StreamingVocos(Vocos):
         for idx, feature in enumerate(torch.unbind(features, dim=2)):
             self.caches = torch.roll(self.caches, shifts=-1, dims=2)
             self.caches[:, :, -1] = feature
-            is_last = is_last and idx == features.shape[2] - 1
+            is_last_feature = is_last and idx == features.shape[2] - 1
             cur_size = self.get_size()
             self.cur_idx += 1
-            if cur_size != self.chunk_size and not is_last:
+            if cur_size != self.chunk_size and not is_last_feature:
                 continue
             audio = self.decode(self.caches, self.bandwidth_id)
             audio = audio[:, self.padding * self.upsample_rate :]
             if cur_size != self.chunk_size:
                 audio = audio[:, (self.chunk_size - cur_size) * self.upsample_rate :]
-            if not is_last:
+            if not is_last_feature:
                 audio = audio[:, : self.chunk_size * self.upsample_rate]
             else:
                 self.reset()
