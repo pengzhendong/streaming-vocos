@@ -73,11 +73,11 @@ class StreamingVocos(Vocos):
         self.padding = int(padding_ms / 1000 * 24000 / self.upsample_rate)
         self.caches_len = self.chunk_size + 2 * self.padding
 
-        self.cur_idx = 0
+        self.cur_idx = -1
         self.caches = torch.zeros((1, self.feature_dim, self.caches_len))
 
     def reset(self):
-        self.cur_idx = 0
+        self.cur_idx = -1
         self.caches = torch.zeros((1, self.feature_dim, self.caches_len))
 
     def get_size(self):
@@ -88,6 +88,16 @@ class StreamingVocos(Vocos):
         if effective_size <= 0:
             return 0
         return effective_size % self.chunk_size or self.chunk_size
+
+    def decode_caches(self):
+        cur_size = self.get_size()
+        if cur_size == 0:
+            return torch.empty()
+        audio = self.decode(self.caches, self.bandwidth_id)
+        audio = audio[:, self.padding * self.upsample_rate :]
+        audio = audio[:, (self.chunk_size - cur_size) * self.upsample_rate :]
+        self.reset()
+        return audio
 
     def streaming_decode(self, features: torch.Tensor, is_last: bool = False):
         """
@@ -105,9 +115,9 @@ class StreamingVocos(Vocos):
         for idx, feature in enumerate(torch.unbind(features, dim=2)):
             self.caches = torch.roll(self.caches, shifts=-1, dims=2)
             self.caches[:, :, -1] = feature
+            self.cur_idx += 1
             is_last_feature = is_last and idx == features.shape[2] - 1
             cur_size = self.get_size()
-            self.cur_idx += 1
             if cur_size != self.chunk_size and not is_last_feature:
                 continue
             audio = self.decode(self.caches, self.bandwidth_id)
