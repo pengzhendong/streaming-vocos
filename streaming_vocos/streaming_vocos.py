@@ -17,10 +17,11 @@ import vocos
 
 
 class Vocos(vocos.Vocos):
-    def __init__(self, name: str = "mel"):
+    def __init__(self, name: str = "mel", device: str = "cpu"):
         self.name = name
+        self.device = device
         assert name in ["encodec", "mel"]
-        parent = vocos.Vocos.from_pretrained(f"charactr/vocos-{name}-24khz")
+        parent = vocos.Vocos.from_pretrained(f"charactr/vocos-{name}-24khz").to(device)
         super().__init__(parent.feature_extractor, parent.backbone, parent.head)
         if name == "encodec":
             self.feature_extractor.encodec.eval()
@@ -47,7 +48,7 @@ class Vocos(vocos.Vocos):
             if bandwidth_id < 0:
                 bandwidth_id += len(self.bandwidths)
             assert 0 <= bandwidth_id < len(self.bandwidths)
-            bandwidth_id = torch.tensor([bandwidth_id])
+            bandwidth_id = torch.tensor([bandwidth_id]).to(self.device)
             return super().decode(features, bandwidth_id=bandwidth_id)
         return super().decode(features)
 
@@ -61,24 +62,26 @@ class StreamingVocos(Vocos):
     def __init__(
         self,
         name: str = "mel",
+        device: str = "cpu",
         bandwidth_id: int = -1,
         chunk_size_ms: int = 300,
         padding_ms: int = None,
     ):
-        super().__init__(name)
+        super().__init__(name, device)
+        self.device = device
         self.bandwidth_id = bandwidth_id
         self.chunk_size = int(chunk_size_ms / 1000 * 24000 / self.upsample_rate)
         # 8 * 3 * self.upsample_rate / 24000 * 1000
         padding_ms = padding_ms or self.upsample_rate
         self.padding = int(padding_ms / 1000 * 24000 / self.upsample_rate)
-        self.caches_len = self.chunk_size + 2 * self.padding
 
         self.cur_idx = -1
-        self.caches = torch.zeros((1, self.feature_dim, self.caches_len))
+        self.caches_shape = (1, self.feature_dim, self.chunk_size + 2 * self.padding)
+        self.caches = torch.zeros(self.caches_shape).to(self.device)
 
     def reset(self):
         self.cur_idx = -1
-        self.caches = torch.zeros((1, self.feature_dim, self.caches_len))
+        self.caches = torch.zeros(self.caches_shape).to(self.device)
 
     def get_size(self):
         """
@@ -92,7 +95,7 @@ class StreamingVocos(Vocos):
     def decode_caches(self):
         cur_size = self.get_size()
         if cur_size == 0:
-            return torch.empty()
+            return torch.empty(1, 0).to(self.device)
         audio = self.decode(self.caches, self.bandwidth_id)
         audio = audio[:, self.padding * self.upsample_rate :]
         audio = audio[:, (self.chunk_size - cur_size) * self.upsample_rate :]
@@ -142,22 +145,21 @@ class StreamingVocos(Vocos):
         audio, sr = torchaudio.load(wav_path)
         if audio.size(0) > 1:
             audio = audio.mean(dim=0, keepdim=True)
+        audio = audio.to(self.device)
         audio = torchaudio.functional.resample(audio, orig_freq=sr, new_freq=24000)
 
         audio_hat = []
         if self.name == "encodec":
             codes = self.get_encodec_codes(audio)
             audio = self.decode_codes(codes)
-            for idx, code in enumerate(torch.unbind(codes, dim=2)):
-                is_last = idx == codes.shape[2] - 1
-                audio_hat += self.streaming_decode_codes(code[:, :, None], is_last=is_last)
+            for code in torch.unbind(codes, dim=2):
+                audio_hat += self.streaming_decode_codes(code[:, :, None])
         else:
             features = self.feature_extractor(audio)
             audio = self.decode(features)
-            for idx, feature in enumerate(torch.unbind(features, dim=2)):
-                is_last = idx == features.shape[2] - 1
-                audio_hat += self.streaming_decode(feature[:, :, None], is_last=is_last)
-
+            for feature in torch.unbind(features, dim=2):
+                audio_hat += self.streaming_decode(feature[:, :, None])
+        audio_hat.append(self.decode_caches())
         audio_hat = torch.cat(audio_hat, dim=1)
         similarity = torch.cosine_similarity(audio, audio_hat).mean()
         print(audio.shape[1], audio_hat.shape[1], similarity)
