@@ -16,13 +16,20 @@ import torch
 import vocos
 
 
+vocos_models = {}
+
+
 class Vocos(vocos.Vocos):
     def __init__(self, name: str = "mel", device: str = "cpu"):
         self.name = name
         self.device = device
         assert name in ["encodec", "mel"]
-        parent = vocos.Vocos.from_pretrained(f"charactr/vocos-{name}-24khz").to(device)
-        super().__init__(parent.feature_extractor, parent.backbone, parent.head)
+        key = f"{name}-{device}"
+        if key not in vocos_models:
+            model = vocos.Vocos.from_pretrained(f"charactr/vocos-{name}-24khz")
+            vocos_models[key] = model.to(device)
+        model = vocos_models[key]
+        super().__init__(model.feature_extractor, model.backbone, model.head)
         if name == "encodec":
             self.feature_extractor.encodec.eval()
             self.bandwidths = self.feature_extractor.bandwidths
