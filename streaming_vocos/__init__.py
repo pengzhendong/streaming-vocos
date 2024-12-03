@@ -12,4 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .streaming_vocos import Vocos, StreamingVocos
+from .streaming_vocos import StreamingVocos, Vocos
+
+__all__ = ["StreamingVocos", "Vocos"]
