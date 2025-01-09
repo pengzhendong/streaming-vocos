@@ -4,32 +4,41 @@ Streaming Vocos is a wrapper of [Vocos](https://github.com/gemelo-ai/vocos). It 
 
 ## Usage
 
+```python
+import torch
+import torchaudio
+from streaming_vocos import StreamingVocos
+from wavesurfer import display
+
+waveform, sample_rate = torchaudio.load("data/test_24k.wav")
+```
+
 - From mel-spectrogram
 
-``` python
-from streaming_vocos import StreamingVocos
+```python
+vocos = StreamingVocos("mel")
+features = vocos.feature_extractor(waveform)
 
-audios = []
-vocos = StreamingVocos()
-features = vocos.feature_extractor(audio)
+def audio_generator():
+    for feature in torch.unbind(features, dim=2):
+        for chunk in vocos.streaming_decode(feature[:, :, None]):
+            yield chunk
+    yield vocos.decode_caches()
 
-for feature in torch.unbind(features, dim=2):
-    audios += vocos.streaming_decode(feature[:, :, None])
-audios.append(vocos.decode_caches())
-audios = torch.cat(audios, dim=1)
+display(audio_generator(), rate=sample_rate, verbose=True)
 ```
 
 - From EnCodec tokens
 
-``` python
-from streaming_vocos import StreamingVocos
+```python
+vocos = StreamingVocos("encodec")
+codes = vocos.get_encodec_codes(waveform)
 
-audios = []
-vocos = StreamingVocos()
-codes = vocos.get_encodec_codes(audio)
+def audio_generator():
+    for code in torch.unbind(codes, dim=2):
+        for chunk in vocos.streaming_decode_codes(code[:, :, None]):
+            yield chunk
+    yield vocos.decode_caches()
 
-for code in torch.unbind(codes, dim=2):
-    audios += vocos.streaming_decode_codes(code[:, :, None])
-audios.append(vocos.decode_caches())
-audios = torch.cat(audios, dim=1)
+display(audio_generator(), rate=sample_rate, verbose=True)
 ```
