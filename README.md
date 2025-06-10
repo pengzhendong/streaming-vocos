@@ -6,18 +6,19 @@ Streaming Vocos is a wrapper of [Vocos](https://github.com/gemelo-ai/vocos). It 
 
 ```python
 import torch
-import torchaudio
+from audiolab import load_audio
 from streaming_vocos import StreamingVocos
-from wavesurfer import display
+from wavesurfer import play
 
-waveform, sample_rate = torchaudio.load("data/test_24k.wav")
+audio, rate = load_audio("data/test_24k.wav", dtype="float32")
+audio = torch.from_numpy(audio)
 ```
 
 - From mel-spectrogram
 
 ```python
 vocos = StreamingVocos("mel")
-features = vocos.feature_extractor(waveform)
+features = vocos.feature_extractor(audio)
 
 def audio_generator():
     for feature in torch.unbind(features, dim=2):
@@ -25,14 +26,14 @@ def audio_generator():
             yield chunk
     yield vocos.decode_caches()
 
-display(audio_generator(), rate=sample_rate, verbose=True)
+play(audio_generator(), rate, verbose=True)
 ```
 
 - From EnCodec tokens
 
 ```python
 vocos = StreamingVocos("encodec")
-codes = vocos.get_encodec_codes(waveform)
+codes = vocos.get_encodec_codes(audio)
 
 def audio_generator():
     for code in torch.unbind(codes, dim=2):
@@ -40,5 +41,5 @@ def audio_generator():
             yield chunk
     yield vocos.decode_caches()
 
-display(audio_generator(), rate=sample_rate, verbose=True)
+play(audio_generator(), rate, verbose=True)
 ```
